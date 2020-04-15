@@ -39,7 +39,7 @@ static ssize_t writen(int fd, void *usrbuf, size_t n)
     return n;
 }
 
-static char *webroot = NULL;
+// static char *webroot = NULL;
 
 typedef struct {
     const char *type;
@@ -57,7 +57,7 @@ static mime_type_t mime[] = {{".html", "text/html"},
                              {".css", "text/css"},
                              {NULL, "text/plain"}};
 
-static void parse_uri(char *uri, int uri_length, char *filename)
+static void parse_uri(char *uri, int uri_length, char *filename, char *webroot)
 {
     assert(uri && "parse_uri: uri is NULL");
     uri[uri_length] = '\0';
@@ -220,7 +220,7 @@ void do_request(void *ptr)
     int fd = r->fd;
     int rc;
     char filename[SHORTLINE];
-    webroot = r->root;
+    char *webroot = r->root;
 
     del_timer(r);
     for (;;) {
@@ -274,7 +274,7 @@ void do_request(void *ptr)
 
         init_http_out(out, fd);
 
-        parse_uri(r->uri_start, r->uri_end - r->uri_start, filename);
+        parse_uri(r->uri_start, r->uri_end - r->uri_start, filename, webroot);
 
         struct stat sbuf;
         if (stat(filename, &sbuf) < 0) {
