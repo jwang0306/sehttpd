@@ -11,6 +11,7 @@
 
 #include "http.h"
 #include "logger.h"
+#include "thpool.h"
 #include "timer.h"
 
 /* the length of the struct epoll_events array pointed to by *events */
@@ -73,6 +74,72 @@ static int sock_set_non_blocking(int fd)
 #define PORT 8081
 #define WEBROOT "./www"
 
+thpool_t *thpool;
+void accept_connection(int listenfd, int epfd)
+{
+    /* we hava one or more incoming connections */
+    while (1) {
+        socklen_t inlen = 1;
+        struct sockaddr_in clientaddr;
+        int infd = accept(listenfd, (struct sockaddr *) &clientaddr, &inlen);
+        if (infd < 0) {
+            if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
+                /* we have processed all incoming connections */
+                break;
+            }
+            log_err("accept");
+            break;
+        }
+
+        int rc UNUSED = sock_set_non_blocking(infd);
+        assert(rc == 0 && "sock_set_non_blocking");
+
+        http_request_t *request = malloc(sizeof(http_request_t));
+        if (!request) {
+            log_err("malloc");
+            break;
+        }
+
+        init_http_request(request, infd, epfd, WEBROOT);
+
+        struct epoll_event event;
+        event.data.ptr = request;
+        event.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+        epoll_ctl(epfd, EPOLL_CTL_ADD, infd, &event);
+
+        add_timer(request, TIMEOUT_DEFAULT, http_close_conn);
+    }
+}
+
+void server_cycle(int listenfd,
+                  int epfd,
+                  struct epoll_event *events,
+                  int event_num,
+                  thpool_t *thpool)
+{
+    for (int i = 0; i < event_num; i++) {
+        http_request_t *r = events[i].data.ptr;
+        int fd = r->fd;
+        if (listenfd == fd) {
+            /* 1. has new connection */
+            accept_connection(listenfd, epfd);
+        } else {
+            /* 2. if error occurs */
+            if ((events[i].events & EPOLLERR) ||
+                (events[i].events & EPOLLHUP) ||
+                (!(events[i].events & EPOLLIN))) {
+                log_err("epoll error fd: %d", r->fd);
+                close(fd);
+                continue;
+            }
+            /* 3. add task to taskqueue */
+            do_request(events[i].data.ptr);
+            queue_add(thpool, (void (*)(void *)) do_request,
+                      events[i].data.ptr);
+        }
+    }
+}
+
 int main()
 {
     /* when a fd is closed by remote, writing to this fd will cause system
@@ -88,6 +155,9 @@ int main()
     int listenfd = open_listenfd(PORT);
     int rc UNUSED = sock_set_non_blocking(listenfd);
     assert(rc == 0 && "sock_set_non_blocking");
+
+    /* initiate a thread pool */
+    thpool = thpool_create(THREAD_COUNT, WORK_QUEUE_SIZE);
 
     /* create epoll and add listenfd */
     int epfd = epoll_create1(0 /* flags */);
@@ -115,55 +185,11 @@ int main()
         debug("wait time = %d", time);
         int n = epoll_wait(epfd, events, MAXEVENTS, time);
         handle_expired_timers();
-
-        for (int i = 0; i < n; i++) {
-            http_request_t *r = events[i].data.ptr;
-            int fd = r->fd;
-            if (listenfd == fd) {
-                /* we hava one or more incoming connections */
-                while (1) {
-                    socklen_t inlen = 1;
-                    struct sockaddr_in clientaddr;
-                    int infd = accept(listenfd, (struct sockaddr *) &clientaddr,
-                                      &inlen);
-                    if (infd < 0) {
-                        if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
-                            /* we have processed all incoming connections */
-                            break;
-                        }
-                        log_err("accept");
-                        break;
-                    }
-
-                    rc = sock_set_non_blocking(infd);
-                    assert(rc == 0 && "sock_set_non_blocking");
-
-                    request = malloc(sizeof(http_request_t));
-                    if (!request) {
-                        log_err("malloc");
-                        break;
-                    }
-
-                    init_http_request(request, infd, epfd, WEBROOT);
-                    event.data.ptr = request;
-                    event.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-                    epoll_ctl(epfd, EPOLL_CTL_ADD, infd, &event);
-
-                    add_timer(request, TIMEOUT_DEFAULT, http_close_conn);
-                }
-            } else {
-                if ((events[i].events & EPOLLERR) ||
-                    (events[i].events & EPOLLHUP) ||
-                    (!(events[i].events & EPOLLIN))) {
-                    log_err("epoll error fd: %d", r->fd);
-                    close(fd);
-                    continue;
-                }
-
-                do_request(events[i].data.ptr);
-            }
-        }
+        server_cycle(listenfd, epfd, events, n, thpool);
     }
+
+    /* destroy thread pool */
+    thpool_destroy(thpool);
 
     return 0;
 }
