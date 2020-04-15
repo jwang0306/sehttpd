@@ -82,6 +82,6 @@ void http_handle_header(http_request_t *r, http_out_t *o)
 
         /* delete it from the original list */
         list_del(pos);
-        free(header);
+        // free(header);
     }
 }
