@@ -133,7 +133,7 @@ void server_cycle(int listenfd,
                 continue;
             }
             /* 3. add task to taskqueue */
-            do_request(events[i].data.ptr);
+            // do_request(events[i].data.ptr);
             queue_add(thpool, (void (*)(void *)) do_request,
                       events[i].data.ptr);
         }
