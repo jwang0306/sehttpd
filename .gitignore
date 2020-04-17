@@ -1,3 +1,5 @@
 *.o
 *.o.d
+*.txt
 sehttpd
+htstress

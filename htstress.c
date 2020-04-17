@@ -80,6 +80,7 @@ static int concurrency = 1;
 static int num_threads = 1;
 
 static char *udaddr = "";
+static char *filename = "";
 
 static volatile uint64_t num_requests = 0;
 static volatile uint64_t max_requests = 0;
@@ -96,13 +97,14 @@ static int exit_i = 0;
 
 static struct timeval tv, tve;
 
-static const char short_options[] = "n:c:t:u:h:d46";
+static const char short_options[] = "n:c:t:f:u:h:d46";
 
 static const struct option long_options[] = {
     {"number", 1, NULL, 'n'},  {"concurrency", 1, NULL, 'c'},
     {"threads", 0, NULL, 't'}, {"udaddr", 1, NULL, 'u'},
     {"host", 1, NULL, 'h'},    {"debug", 0, NULL, 'd'},
-    {"help", 0, NULL, '%'},    {NULL, 0, NULL, 0}};
+    {"help", 0, NULL, '%'},    {"filename", 1, NULL, 'f'},
+    {NULL, 0, NULL, 0}};
 
 static void sigint_handler(int arg)
 {
@@ -380,6 +382,9 @@ int main(int argc, char *argv[])
         case 't':
             num_threads = atoi(optarg);
             break;
+        case 'f':
+            filename = optarg;
+            break;
         case 'u':
             udaddr = optarg;
             break;
@@ -531,6 +536,13 @@ int main(int argc, char *argv[])
         socket_errors,
         (int) (num_requests ? socket_errors * 100 / num_requests : 0), delta,
         delta > 0 ? max_requests / delta : 0);
+
+    if (strlen(filename) > 0) {
+        FILE *fp = fopen(filename, "a+");
+        fprintf(fp, "%d %.3f\n", concurrency, max_requests / delta);
+        printf("written to %s\n", filename);
+        fclose(fp);
+    }
 
     return 0;
 }
