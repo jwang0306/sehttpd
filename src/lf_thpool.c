@@ -91,12 +91,11 @@ int dispatch_task(thread_t *thread, void (*task)(void *), void *arg)
 static void perform_tasks(thread_t *thread)
 {
     task_t *task = NULL;
-    while (__sync_val_compare_and_swap(&(thread->task_count), 0, 0)) {
+    do {
         task = lf_thpool_deq(thread);
-        if (task) {
+        if (task)
             (task->function)(task->arg);
-        }
-    }
+    } while (task);
 }
 
 static void *worker_thread_cycle(void *arg)
