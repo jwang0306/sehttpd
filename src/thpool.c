@@ -3,8 +3,6 @@
 
 static void perform_tasks();
 static void *worker_thread_cycle(void *arg);
-static void thread_sleep(thpool_t *thpool);
-static void thread_wakeup(thpool_t *thpool);
 
 thpool_t *thpool_create(int thread_count, int queue_size)
 {
@@ -53,12 +51,12 @@ static void perform_tasks(thpool_t *thpool)
     do {
         pthread_mutex_lock(&(thpool->lock));
 
-        while (queue_is_empty(thpool)) {
-            thread_sleep(thpool);
+        while (thpool_q_empty(thpool)) {
+            pthread_cond_wait(&(thpool->cond), &(thpool->lock));
         }
 
         /* grab a task from queue */
-        task = queue_deq(thpool);
+        task = thpool_deq(thpool);
 
         pthread_mutex_unlock(&(thpool->lock));
         /* preform the task */
@@ -66,16 +64,6 @@ static void perform_tasks(thpool_t *thpool)
             (task->function)(task->arg);
         }
     } while (task);
-}
-
-static void thread_sleep(thpool_t *thpool)
-{
-    pthread_cond_wait(&(thpool->cond), &(thpool->lock));
-}
-
-static void thread_wakeup(thpool_t *thpool)
-{
-    pthread_cond_signal(&(thpool->cond));
 }
 
 static void *worker_thread_cycle(void *arg)
@@ -88,7 +76,7 @@ static void *worker_thread_cycle(void *arg)
     return 0;
 }
 
-task_t *queue_deq(thpool_t *thpool)
+task_t *thpool_deq(thpool_t *thpool)
 {
     if (thpool->queue->task_count == 0)
         return NULL;
@@ -98,7 +86,7 @@ task_t *queue_deq(thpool_t *thpool)
     return (thpool->queue->buffer + tmp_offset);
 }
 
-void queue_add(thpool_t *thpool, void (*task)(void *), void *arg)
+void thpool_enq(thpool_t *thpool, void (*task)(void *), void *arg)
 {
     pthread_mutex_lock(&(thpool->lock));
     if (thpool->queue->task_count >= thpool->queue->size) {
@@ -111,12 +99,13 @@ void queue_add(thpool_t *thpool, void (*task)(void *), void *arg)
     (thpool->queue->buffer + thpool->queue->in)->arg = arg;
     thpool->queue->in = (thpool->queue->in + 1) % thpool->queue->size;
     ++thpool->queue->task_count;
-    thread_wakeup(thpool);
+    if (thpool->queue->task_count == 1)
+        pthread_cond_signal(&(thpool->cond));
 
     pthread_mutex_unlock(&(thpool->lock));
 }
 
-int queue_is_empty(thpool_t *thpool)
+int thpool_q_empty(thpool_t *thpool)
 {
     return (thpool->queue->task_count == 0) ? 1 : 0;
 }

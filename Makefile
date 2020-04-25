@@ -9,6 +9,9 @@ $(GIT_HOOKS):
 
 include common.mk
 
+THREADSANITIZE := 1
+POOL = LF_THPOOL
+
 CFLAGS = -I./src
 CFLAGS += -O2
 CFLAGS += -std=gnu99 -Wall -W
@@ -16,14 +19,19 @@ CFLAGS += -DUNUSED="__attribute__((unused))"
 CFLAGS += -DNDEBUG
 LDFLAGS_user = -lpthread
 LDFLAGS =
+
+ifeq ($(THREADSANITIZE), 1)
 CFLAGS += -fsanitize=thread
 LDFLAGS += -fsanitize=thread
+else
+LDFLAGS += -lpthread
+endif
 
 # standard build rules
 .SUFFIXES: .o .c
 .c.o:
 	$(VECHO) "  CC\t$@\n"
-	$(Q)$(CC) -o $@ $(CFLAGS) -c -MMD -MF $@.d $<
+	$(Q)$(CC) -o $@ $(CFLAGS) -c -MMD -MF $@.d $< -D $(POOL)
 
 OBJS = \
     src/http.o \

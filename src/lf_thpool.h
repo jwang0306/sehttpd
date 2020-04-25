@@ -3,7 +3,7 @@
 
 #include <fcntl.h>
 #include <pthread.h>
-#include <signal.h>
+// #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,8 +11,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define THREAD_COUNT 4
-#define WORK_QUEUE_SIZE 65535
 
 typedef struct {
     void (*function)(void *);
@@ -21,22 +19,20 @@ typedef struct {
 
 /* define a thread structure */
 typedef struct {
-    // task_t *buffer;
-    task_t buffer[WORK_QUEUE_SIZE];  // workqueue
-    int id;                          // thread id
-    pthread_t thr;                   // the actual thread
-    int size;                        // size of queue
-    unsigned int in;                 // index of pushing a task
-    unsigned int out;                // index of popping a task
-    volatile unsigned task_count;    // number of tasks in queue
+    task_t *buffer;           // workqueue
+    pthread_t thr;            // the actual thread
+    int id;                   // thread id
+    int size;                 // size of queue
+    unsigned int in;          // index of pushing a task
+    unsigned int out;         // index of popping a task
+    volatile int task_count;  // number of tasks in queue
 } thread_t;
 
 /* define a thread pool structure */
 typedef struct {
-    // thread_t *threads;
+    thread_t *threads;
     int thread_count;
     int is_stopped;
-    thread_t threads[];
 } lf_thpool_t;
 
 /* utils */

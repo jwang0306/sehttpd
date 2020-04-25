@@ -11,13 +11,22 @@
 
 #include "http.h"
 #include "logger.h"
-#include "thpool.h"
 #include "timer.h"
+
+#if (THPOOL)
+#include "thpool.h"
+#endif
+#if (LF_THPOOL)
+#include "lf_thpool.h"
+#endif
 
 /* the length of the struct epoll_events array pointed to by *events */
 #define MAXEVENTS 1024
 
 #define LISTENQ 1024
+
+#define THREAD_COUNT 4
+#define WORK_QUEUE_SIZE 65536
 
 static int open_listenfd(int port)
 {
@@ -74,7 +83,13 @@ static int sock_set_non_blocking(int fd)
 #define PORT 8081
 #define WEBROOT "./www"
 
+#if (THPOOL)
 thpool_t *thpool;
+#endif
+#if (LF_THPOOL)
+lf_thpool_t *thpool;
+#endif
+
 void accept_connection(int listenfd, int epfd)
 {
     /* we hava one or more incoming connections */
@@ -114,17 +129,14 @@ void accept_connection(int listenfd, int epfd)
 void server_cycle(int listenfd,
                   int epfd,
                   struct epoll_event *events,
-                  int event_num,
-                  thpool_t *thpool)
+                  int event_num)
 {
     for (int i = 0; i < event_num; i++) {
         http_request_t *r = events[i].data.ptr;
         int fd = r->fd;
         if (listenfd == fd) {
-            /* 1. has new connection */
             accept_connection(listenfd, epfd);
         } else {
-            /* 2. if error occurs */
             if ((events[i].events & EPOLLERR) ||
                 (events[i].events & EPOLLHUP) ||
                 (!(events[i].events & EPOLLIN))) {
@@ -132,10 +144,17 @@ void server_cycle(int listenfd,
                 close(fd);
                 continue;
             }
-            /* 3. add task to taskqueue */
-            // do_request(events[i].data.ptr);
-            queue_add(thpool, (void (*)(void *)) do_request,
-                      events[i].data.ptr);
+#if (THPOOL)
+            thpool_enq(thpool, (void (*)(void *)) do_request,
+                       events[i].data.ptr);
+            continue;
+#endif
+#if (LF_THPOOL)
+            lf_thpool_enq(thpool, (void (*)(void *)) do_request,
+                          events[i].data.ptr);
+            continue;
+#endif
+            do_request(events[i].data.ptr);
         }
     }
 }
@@ -157,8 +176,12 @@ int main()
     assert(rc == 0 && "sock_set_non_blocking");
 
     /* initiate a thread pool */
+#if (THPOOL)
     thpool = thpool_create(THREAD_COUNT, WORK_QUEUE_SIZE);
-
+#endif
+#if (LF_THPOOL)
+    thpool = lf_thpool_create(THREAD_COUNT, WORK_QUEUE_SIZE);
+#endif
     /* create epoll and add listenfd */
     int epfd = epoll_create1(0 /* flags */);
     assert(epfd > 0 && "epoll_create1");
@@ -185,11 +208,16 @@ int main()
         debug("wait time = %d", time);
         int n = epoll_wait(epfd, events, MAXEVENTS, time);
         handle_expired_timers();
-        server_cycle(listenfd, epfd, events, n, thpool);
+        server_cycle(listenfd, epfd, events, n);
     }
 
     /* destroy thread pool */
+#if (THPOOL)
     thpool_destroy(thpool);
+#endif
+#if (LF_THPOOL)
+    lf_thpool_destroy(thpool);
+#endif
 
     return 0;
 }
