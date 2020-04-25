@@ -14,9 +14,9 @@ CFLAGS += -O2
 CFLAGS += -std=gnu99 -Wall -W
 CFLAGS += -DUNUSED="__attribute__((unused))"
 CFLAGS += -DNDEBUG
-CFLAGS += -fsanitize=thread
 LDFLAGS_user = -lpthread
-LDFLAGS = 
+LDFLAGS =
+CFLAGS += -fsanitize=thread
 LDFLAGS += -fsanitize=thread
 
 # standard build rules
@@ -30,7 +30,8 @@ OBJS = \
     src/http_parser.o \
     src/http_request.o \
     src/timer.o \
-	src/lf_thpool.o \
+    src/thpool.o \
+    src/lf_thpool.o \
     src/mainloop.o
 deps += $(OBJS:%.o=%.o.d)
 
