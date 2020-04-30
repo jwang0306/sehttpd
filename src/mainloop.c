@@ -8,6 +8,7 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <wait.h>
 
 #include "http.h"
 #include "logger.h"
@@ -15,9 +16,11 @@
 
 #if (THPOOL)
 #include "thpool.h"
+thpool_t *thpool;
 #endif
 #if (LF_THPOOL)
 #include "lf_thpool.h"
+lf_thpool_t *thpool;
 #endif
 
 /* the length of the struct epoll_events array pointed to by *events */
@@ -28,34 +31,38 @@
 #define THREAD_COUNT 4
 #define WORK_QUEUE_SIZE 65536
 
-static int open_listenfd(int port)
+/* TODO: use command line options to specify */
+#define PORT 8080
+#define WEBROOT "./www"
+
+bool master_process = true;
+int worker_processes = 4;
+
+int epfd = -1;
+static struct epoll_event *events;
+
+void event_init()
 {
-    int listenfd, optval = 1;
+    assert(epfd == -1);
 
-    /* Create a socket descriptor */
-    if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-        return -1;
+    /* create epoll and add listenfd */
+    epfd = epoll_create1(0 /* flags */);
+    assert(epfd > 0 && "epoll_create1");
 
-    /* Eliminate "Address already in use" error from bind. */
-    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const void *) &optval,
-                   sizeof(int)) < 0)
-        return -1;
+    events = malloc(sizeof(struct epoll_event) * MAXEVENTS);
+    assert(events && "epoll_event: malloc");
+}
 
-    /* Listenfd will be an endpoint for all requests to given port. */
-    struct sockaddr_in serveraddr = {
-        .sin_family = AF_INET,
-        .sin_addr.s_addr = htonl(INADDR_ANY),
-        .sin_port = htons((unsigned short) port),
-        .sin_zero = {0},
+void request_init(int listenfd)
+{
+    http_request_t *request = malloc(sizeof(http_request_t));
+    init_http_request(request, listenfd, epfd, WEBROOT);
+
+    struct epoll_event event = {
+        .data.ptr = request,
+        .events = EPOLLIN | EPOLLET,
     };
-    if (bind(listenfd, (struct sockaddr *) &serveraddr, sizeof(serveraddr)) < 0)
-        return -1;
-
-    /* Make it a listening socket ready to accept connection requests */
-    if (listen(listenfd, LISTENQ) < 0)
-        return -1;
-
-    return listenfd;
+    epoll_ctl(epfd, EPOLL_CTL_ADD, listenfd, &event);
 }
 
 /* set a socket non-blocking. If a listen socket is a blocking socket, after
@@ -79,18 +86,50 @@ static int sock_set_non_blocking(int fd)
     return 0;
 }
 
-/* TODO: use command line options to specify */
-#define PORT 8081
-#define WEBROOT "./www"
+static int open_listenfd(int port)
+{
+    int listenfd, optval = 1;
 
-#if (THPOOL)
-thpool_t *thpool;
-#endif
-#if (LF_THPOOL)
-lf_thpool_t *thpool;
-#endif
+    /* Create a socket descriptor */
+    if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+        return -1;
 
-void accept_connection(int listenfd, int epfd)
+    /* Eliminate "Address already in use" error from bind. */
+    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEPORT, (const void *) &optval,
+                   sizeof(int)) < 0)
+        return -1;
+
+    /* Listenfd will be an endpoint for all requests to given port. */
+    struct sockaddr_in serveraddr = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+        .sin_port = htons((unsigned short) port),
+        .sin_zero = {0},
+    };
+    if (bind(listenfd, (struct sockaddr *) &serveraddr, sizeof(serveraddr)) < 0)
+        return -1;
+
+    /* Make it a listening socket ready to accept connection requests */
+    if (listen(listenfd, LISTENQ) < 0)
+        return -1;
+
+    int rc UNUSED = sock_set_non_blocking(listenfd);
+    assert(rc == 0 && "sock_set_non_blocking");
+
+    return listenfd;
+}
+
+int worker_init()
+{
+    event_init();
+    timer_init();
+    int listenfd = open_listenfd(PORT);
+    request_init(listenfd);
+
+    return listenfd;
+}
+
+void accept_connection(int listenfd)
 {
     /* we hava one or more incoming connections */
     while (1) {
@@ -126,16 +165,14 @@ void accept_connection(int listenfd, int epfd)
     }
 }
 
-void server_cycle(int listenfd,
-                  int epfd,
-                  struct epoll_event *events,
-                  int event_num)
+void process_event(int listenfd)
 {
-    for (int i = 0; i < event_num; i++) {
+    int n = epoll_wait(epfd, events, MAXEVENTS, find_timer());
+    for (int i = 0; i < n; i++) {
         http_request_t *r = events[i].data.ptr;
         int fd = r->fd;
         if (listenfd == fd) {
-            accept_connection(listenfd, epfd);
+            accept_connection(listenfd);
         } else {
             if ((events[i].events & EPOLLERR) ||
                 (events[i].events & EPOLLHUP) ||
@@ -144,18 +181,69 @@ void server_cycle(int listenfd,
                 close(fd);
                 continue;
             }
-#if (THPOOL)
-            thpool_enq(thpool, (void (*)(void *)) do_request,
-                       events[i].data.ptr);
-            continue;
-#endif
-#if (LF_THPOOL)
-            lf_thpool_enq(thpool, (void (*)(void *)) do_request,
-                          events[i].data.ptr);
-            continue;
-#endif
             do_request(events[i].data.ptr);
         }
+    }
+}
+
+void process_event_and_timer(int listenfd)
+{
+    process_event(listenfd);
+    handle_expired_timers();
+}
+
+int shutdown_worker(int pid)
+{
+    int status;
+    kill(pid, SIGTERM);
+    waitpid(pid, &status, 0);
+
+    if (status < 0) {
+        perror("The child process terminated with error");
+        return -1;
+    }
+
+    return 0;
+}
+
+void single_process_cycle(int pid)
+{
+    int listenfd = worker_init();
+    /* epoll_wait loop */
+    printf("Worker process %d: Web server started.\n", pid);
+    while (1) {
+        process_event_and_timer(listenfd);
+    }
+}
+
+void master_process_cycle()
+{
+    int worker_pid[worker_processes];
+    for (int i = 0; i < worker_processes; ++i) {
+        worker_pid[i] = fork();
+        switch (worker_pid[i]) {
+        case -1:
+            perror("run master process fork error");
+            exit(EXIT_FAILURE);
+        case 0:
+            single_process_cycle(i + 1);
+            exit(EXIT_SUCCESS);
+        default:
+            break;
+        }
+    }
+    sigset_t sigset;
+    sigemptyset(&sigset);
+    sigaddset(&sigset, SIGTERM);
+    sigaddset(&sigset, SIGINT);
+    sigaddset(&sigset, SIGKILL);
+
+    int result;
+    sigwait(&sigset, &result);
+
+    for (int i = 0; i < worker_processes; i++) {
+        shutdown_worker(worker_pid[i]);
+        printf("Shutdown worker %d\n", i + 1);
     }
 }
 
@@ -170,54 +258,10 @@ int main()
         log_err("Failed to install sigal handler for SIGPIPE");
         return 0;
     }
-
-    int listenfd = open_listenfd(PORT);
-    int rc UNUSED = sock_set_non_blocking(listenfd);
-    assert(rc == 0 && "sock_set_non_blocking");
-
-    /* initiate a thread pool */
-#if (THPOOL)
-    thpool = thpool_create(THREAD_COUNT, WORK_QUEUE_SIZE);
-#endif
-#if (LF_THPOOL)
-    thpool = lf_thpool_create(THREAD_COUNT, WORK_QUEUE_SIZE);
-#endif
-    /* create epoll and add listenfd */
-    int epfd = epoll_create1(0 /* flags */);
-    assert(epfd > 0 && "epoll_create1");
-
-    struct epoll_event *events = malloc(sizeof(struct epoll_event) * MAXEVENTS);
-    assert(events && "epoll_event: malloc");
-
-    http_request_t *request = malloc(sizeof(http_request_t));
-    init_http_request(request, listenfd, epfd, WEBROOT);
-
-    struct epoll_event event = {
-        .data.ptr = request,
-        .events = EPOLLIN | EPOLLET,
-    };
-    epoll_ctl(epfd, EPOLL_CTL_ADD, listenfd, &event);
-
-    timer_init();
-
-    printf("Web server started.\n");
-
-    /* epoll_wait loop */
-    while (1) {
-        int time = find_timer();
-        debug("wait time = %d", time);
-        int n = epoll_wait(epfd, events, MAXEVENTS, time);
-        handle_expired_timers();
-        server_cycle(listenfd, epfd, events, n);
+    if (master_process) {
+        master_process_cycle();
+    } else {
+        single_process_cycle(1);
     }
-
-    /* destroy thread pool */
-#if (THPOOL)
-    thpool_destroy(thpool);
-#endif
-#if (LF_THPOOL)
-    lf_thpool_destroy(thpool);
-#endif
-
     return 0;
 }

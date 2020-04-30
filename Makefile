@@ -9,8 +9,8 @@ $(GIT_HOOKS):
 
 include common.mk
 
-THREADSANITIZE := 1
-POOL = LF_THPOOL
+THREADSANITIZE := 0
+POOL := No
 
 CFLAGS = -I./src
 CFLAGS += -O2
