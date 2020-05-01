@@ -5,8 +5,8 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <sys/sendfile.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "http.h"
@@ -165,28 +165,36 @@ static void serve_static(int fd,
     sprintf(header, "HTTP/1.1 %d %s\r\n", out->status,
             get_msg_from_status(out->status));
 
+    size_t upto = strlen(header);
+
     if (out->keep_alive) {
-        sprintf(header, "%sConnection: keep-alive\r\n", header);
-        sprintf(header, "%sKeep-Alive: timeout=%d\r\n", header,
-                TIMEOUT_DEFAULT);
+        upto += snprintf(header + upto, MAXLINE - upto,
+                         "Connection: keep-alive\r\n"
+                         "Keep-Alive: timeout=%d\r\n",
+                         TIMEOUT_DEFAULT);
     }
 
     if (out->modified) {
         char buf[SHORTLINE];
-        sprintf(header, "%sContent-type: %s\r\n", header, file_type);
-        sprintf(header, "%sContent-length: %zu\r\n", header, filesize);
+
+        upto += snprintf(header + upto, MAXLINE - upto,
+                         "Content-type: %s\r\n"
+                         "Content-length: %zu\r\n",
+                         file_type, filesize);
+
         struct tm tm;
         localtime_r(&(out->mtime), &tm);
         strftime(buf, SHORTLINE, "%a, %d %b %Y %H:%M:%S GMT", &tm);
-        sprintf(header, "%sLast-Modified: %s\r\n", header, buf);
+
+        upto += snprintf(header + upto, MAXLINE - upto, "Last-Modified: %s\r\n",
+                         buf);
     }
 
-    sprintf(header, "%sServer: seHTTPd\r\n", header);
-    sprintf(header, "%s\r\n", header);
+    upto += snprintf(header + upto, MAXLINE - upto, "Server: seHTTPd\r\n\r\n");
 
     size_t n = (size_t) writen(fd, header, strlen(header));
-    assert(n == strlen(header) && "writen error");
-    if (n != strlen(header)) {
+    assert(n == upto && "writen error");
+    if (n != upto) {
         log_err("n != strlen(header)");
         return;
     }
