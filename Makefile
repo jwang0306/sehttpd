@@ -10,7 +10,15 @@ $(GIT_HOOKS):
 include common.mk
 
 THREADSANITIZE := 0
-POOL := No
+THPOOLFLAG := No
+HAVE_SO_REUSEPORT := 1
+SOCKETFLAG =
+ifeq ($(HAVE_SO_REUSEPORT), 1)
+SOCKETFLAG += HAVE_SO_REUSEPORT
+else
+SOCKETFLAG += No
+endif
+ 
 
 CFLAGS = -I./src
 CFLAGS += -O2
@@ -31,7 +39,7 @@ endif
 .SUFFIXES: .o .c
 .c.o:
 	$(VECHO) "  CC\t$@\n"
-	$(Q)$(CC) -o $@ $(CFLAGS) -c -MMD -MF $@.d $< -D $(POOL)
+	$(Q)$(CC) -o $@ $(CFLAGS) -c -MMD -MF $@.d $< -D $(THPOOLFLAG) -D $(SOCKETFLAG)
 
 OBJS = \
     src/http.o \

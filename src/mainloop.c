@@ -32,7 +32,7 @@ lf_thpool_t *thpool;
 #define WORK_QUEUE_SIZE 65536
 
 /* TODO: use command line options to specify */
-#define PORT 8080
+#define PORT 8091
 #define WEBROOT "./www"
 
 bool master_process = true;
@@ -60,7 +60,7 @@ void request_init(int listenfd)
 
     struct epoll_event event = {
         .data.ptr = request,
-        .events = EPOLLIN | EPOLLET,
+        .events = EPOLLIN | EPOLLET | EPOLLEXCLUSIVE,
     };
     epoll_ctl(epfd, EPOLL_CTL_ADD, listenfd, &event);
 }
@@ -94,10 +94,16 @@ static int open_listenfd(int port)
     if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
         return -1;
 
-    /* Eliminate "Address already in use" error from bind. */
+#if (HAVE_SO_REUSEPORT)
     if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEPORT, (const void *) &optval,
                    sizeof(int)) < 0)
         return -1;
+#else
+    /* Eliminate "Address already in use" error from bind. */
+    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const void *) &optval,
+                   sizeof(int)) < 0)
+        return -1;
+#endif
 
     /* Listenfd will be an endpoint for all requests to given port. */
     struct sockaddr_in serveraddr = {
@@ -115,16 +121,6 @@ static int open_listenfd(int port)
 
     int rc UNUSED = sock_set_non_blocking(listenfd);
     assert(rc == 0 && "sock_set_non_blocking");
-
-    return listenfd;
-}
-
-int worker_init()
-{
-    event_init();
-    timer_init();
-    int listenfd = open_listenfd(PORT);
-    request_init(listenfd);
 
     return listenfd;
 }
@@ -165,7 +161,7 @@ void accept_connection(int listenfd)
     }
 }
 
-void process_event(int listenfd)
+void process_events(int listenfd)
 {
     int n = epoll_wait(epfd, events, MAXEVENTS, find_timer());
     for (int i = 0; i < n; i++) {
@@ -186,9 +182,9 @@ void process_event(int listenfd)
     }
 }
 
-void process_event_and_timer(int listenfd)
+void process_events_and_timers(int listenfd)
 {
-    process_event(listenfd);
+    process_events(listenfd);
     handle_expired_timers();
 }
 
@@ -206,29 +202,51 @@ int shutdown_worker(int pid)
     return 0;
 }
 
-void single_process_cycle(int pid)
+void single_process_cycle(int listenfd)
 {
-    int listenfd = worker_init();
+#if (HAVE_SO_REUSEPORT)
+    listenfd = open_listenfd(PORT);
+#endif
+    event_init();
+    timer_init();
+    request_init(listenfd);
+
     /* epoll_wait loop */
-    printf("Worker process %d: Web server started.\n", pid);
+    printf("Worker process %d: Web server started.\n", getpid());
     while (1) {
-        process_event_and_timer(listenfd);
+        process_events_and_timers(listenfd);
+    }
+}
+
+int spawn_process(int listenfd)
+{
+    int pid = fork();
+    switch (pid) {
+    case -1:
+        perror("run master process fork error");
+        exit(EXIT_FAILURE);
+    case 0:
+        single_process_cycle(listenfd);
+        exit(EXIT_SUCCESS);
+    default:
+        return pid;
     }
 }
 
 void master_process_cycle()
 {
+    int listenfd = -1;
+#if (HAVE_SO_REUSEPORT)
+#else
+    listenfd = open_listenfd(PORT);
+#endif
+
     int worker_pid[worker_processes];
     for (int i = 0; i < worker_processes; ++i) {
-        worker_pid[i] = fork();
-        switch (worker_pid[i]) {
-        case -1:
-            perror("run master process fork error");
-            exit(EXIT_FAILURE);
-        case 0:
-            single_process_cycle(i + 1);
-            exit(EXIT_SUCCESS);
-        default:
+        worker_pid[i] = spawn_process(listenfd);
+        if (worker_pid[i] <= 0) {
+            puts("Created new worker");
+            perror("There was an error during worker creation, aborting...");
             break;
         }
     }
@@ -236,6 +254,7 @@ void master_process_cycle()
     sigemptyset(&sigset);
     sigaddset(&sigset, SIGTERM);
     sigaddset(&sigset, SIGINT);
+    sigaddset(&sigset, SIGQUIT);
     sigaddset(&sigset, SIGKILL);
 
     int result;
@@ -243,7 +262,7 @@ void master_process_cycle()
 
     for (int i = 0; i < worker_processes; i++) {
         shutdown_worker(worker_pid[i]);
-        printf("Shutdown worker %d\n", i + 1);
+        printf("Shutdown worker %d\n", worker_pid[i]);
     }
 }
 
