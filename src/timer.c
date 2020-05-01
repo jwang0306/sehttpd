@@ -140,6 +140,7 @@ static int timer_comp(void *ti, void *tj)
 
 static prio_queue_t timer;
 static size_t current_msec;
+pthread_mutex_t timer_lock;
 
 static void time_update()
 {
@@ -153,6 +154,8 @@ int timer_init()
 {
     bool ret UNUSED = prio_queue_init(&timer, timer_comp, PQ_DEFAULT_SIZE);
     assert(ret && "prio_queue_init error");
+    int tl UNUSED = pthread_mutex_init(&timer_lock, NULL);
+    assert(tl == 0 && "timer lock init error");
 
     time_update();
     return 0;
@@ -160,6 +163,7 @@ int timer_init()
 
 int find_timer()
 {
+    pthread_mutex_lock(&timer_lock);
     int time = TIMER_INFINITE;
 
     while (!prio_queue_is_empty(&timer)) {
@@ -178,11 +182,13 @@ int find_timer()
         time = (time > 0 ? time : 0);
         break;
     }
+    pthread_mutex_unlock(&timer_lock);
     return time;
 }
 
 void handle_expired_timers()
 {
+    pthread_mutex_lock(&timer_lock);
     bool ret UNUSED;
 
     while (!prio_queue_is_empty(&timer)) {
@@ -199,6 +205,7 @@ void handle_expired_timers()
         }
 
         if (node->key > current_msec) {
+            pthread_mutex_unlock(&timer_lock);
             return;
         }
         if (node->callback)
@@ -208,10 +215,12 @@ void handle_expired_timers()
         assert(ret && "handle_expired_timers: prio_queue_delmin error");
         free(node);
     }
+    pthread_mutex_unlock(&timer_lock);
 }
 
 void add_timer(http_request_t *req, size_t timeout, timer_callback cb)
 {
+    pthread_mutex_lock(&timer_lock);
     timer_node *node = malloc(sizeof(timer_node));
     assert(node && "add_timer: malloc error");
 
@@ -224,13 +233,16 @@ void add_timer(http_request_t *req, size_t timeout, timer_callback cb)
 
     bool ret UNUSED = prio_queue_insert(&timer, node);
     assert(ret && "add_timer: prio_queue_insert error");
+    pthread_mutex_unlock(&timer_lock);
 }
 
 void del_timer(http_request_t *req)
 {
+    pthread_mutex_lock(&timer_lock);
     time_update();
     timer_node *node = req->timer;
     assert(node && "del_timer: req->timer is NULL");
 
     node->deleted = true;
+    pthread_mutex_unlock(&timer_lock);
 }

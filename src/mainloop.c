@@ -16,11 +16,9 @@
 
 #if (THPOOL)
 #include "thpool.h"
-thpool_t *thpool;
 #endif
 #if (LF_THPOOL)
 #include "lf_thpool.h"
-lf_thpool_t *thpool;
 #endif
 
 /* the length of the struct epoll_events array pointed to by *events */
@@ -161,7 +159,7 @@ void accept_connection(int listenfd)
     }
 }
 
-void process_events(int listenfd)
+void process_events(int listenfd, void *thpool UNUSED)
 {
     int n = epoll_wait(epfd, events, MAXEVENTS, find_timer());
     for (int i = 0; i < n; i++) {
@@ -177,14 +175,22 @@ void process_events(int listenfd)
                 close(fd);
                 continue;
             }
+#if (THPOOL)
+            thpool_enq(thpool, do_request, events[i].data.ptr);
+            continue;
+#endif
+#if (LF_THPOOL)
+            lf_thpool_enq(thpool, do_request, events[i].data.ptr);
+            continue;
+#endif
             do_request(events[i].data.ptr);
         }
     }
 }
 
-void process_events_and_timers(int listenfd)
+void process_events_and_timers(int listenfd, void *thpool)
 {
-    process_events(listenfd);
+    process_events(listenfd, thpool);
     handle_expired_timers();
 }
 
@@ -210,11 +216,17 @@ void single_process_cycle(int listenfd)
     event_init();
     timer_init();
     request_init(listenfd);
-
+    void *thpool = NULL;
+#if (THPOOL)
+    thpool = thpool_create(THREAD_COUNT, WORK_QUEUE_SIZE);
+#endif
+#if (LF_THPOOL)
+    thpool = lf_thpool_create(THREAD_COUNT, WORK_QUEUE_SIZE);
+#endif
     /* epoll_wait loop */
     printf("Worker process %d: Web server started.\n", getpid());
     while (1) {
-        process_events_and_timers(listenfd);
+        process_events_and_timers(listenfd, thpool);
     }
 }
 

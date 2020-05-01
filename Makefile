@@ -11,6 +11,8 @@ include common.mk
 
 THREADSANITIZE = 0
 ENABLE_SO_REUSEPORT = 1
+ENABLE_THPOOL = 1
+SOCKETFLAG = ENABLE_SO_REUSEPORT
 THPOOLFLAG = THPOOL
 
 CFLAGS = -I./src
@@ -28,10 +30,12 @@ LDFLAGS += -lpthread
 endif
 
 ifeq ($(ENABLE_SO_REUSEPORT), 1)
-CFLAGS += -D ENABLE_SO_REUSEPORT
+CFLAGS += -D $(SOCKETFLAG)
 endif
 
-CFLAGS += -D THPOOLFLAG
+ifeq ($(ENABLE_THPOOL), 1)
+CFLAGS += -D $(THPOOLFLAG)
+endif
 
 CFLAG_HTSTRESS += -std=gnu99 -Wall -Werror -Wextra -lpthread
 
