@@ -32,7 +32,7 @@ lf_thpool_t *thpool;
 #define WORK_QUEUE_SIZE 65536
 
 /* TODO: use command line options to specify */
-#define PORT 8091
+#define PORT 8081
 #define WEBROOT "./www"
 
 bool master_process = true;
@@ -94,7 +94,7 @@ static int open_listenfd(int port)
     if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
         return -1;
 
-#if (HAVE_SO_REUSEPORT)
+#if (ENABLE_SO_REUSEPORT)
     if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEPORT, (const void *) &optval,
                    sizeof(int)) < 0)
         return -1;
@@ -204,7 +204,7 @@ int shutdown_worker(int pid)
 
 void single_process_cycle(int listenfd)
 {
-#if (HAVE_SO_REUSEPORT)
+#if (ENABLE_SO_REUSEPORT)
     listenfd = open_listenfd(PORT);
 #endif
     event_init();
@@ -223,7 +223,7 @@ int spawn_process(int listenfd)
     int pid = fork();
     switch (pid) {
     case -1:
-        perror("run master process fork error");
+        log_err("spawn_process fork error");
         exit(EXIT_FAILURE);
     case 0:
         single_process_cycle(listenfd);
@@ -236,8 +236,7 @@ int spawn_process(int listenfd)
 void master_process_cycle()
 {
     int listenfd = -1;
-#if (HAVE_SO_REUSEPORT)
-#else
+#if !defined(ENABLE_SO_REUSEPORT)
     listenfd = open_listenfd(PORT);
 #endif
 
@@ -245,8 +244,7 @@ void master_process_cycle()
     for (int i = 0; i < worker_processes; ++i) {
         worker_pid[i] = spawn_process(listenfd);
         if (worker_pid[i] <= 0) {
-            puts("Created new worker");
-            perror("There was an error during worker creation, aborting...");
+            log_err("Error during worker creation");
             break;
         }
     }

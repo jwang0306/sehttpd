@@ -1,7 +1,7 @@
 .PHONY: all check clean
-TARGET = sehttpd htstress
+TARGET = sehttpd
 GIT_HOOKS := .git/hooks/applied
-all: $(GIT_HOOKS) $(TARGET)
+all: $(GIT_HOOKS) $(TARGET) htstress
 
 $(GIT_HOOKS):
 	@scripts/install-git-hooks
@@ -9,23 +9,15 @@ $(GIT_HOOKS):
 
 include common.mk
 
-THREADSANITIZE := 0
-THPOOLFLAG := No
-HAVE_SO_REUSEPORT := 1
-SOCKETFLAG =
-ifeq ($(HAVE_SO_REUSEPORT), 1)
-SOCKETFLAG += HAVE_SO_REUSEPORT
-else
-SOCKETFLAG += No
-endif
- 
+THREADSANITIZE = 0
+ENABLE_SO_REUSEPORT = 1
+THPOOLFLAG = THPOOL
 
 CFLAGS = -I./src
 CFLAGS += -O2
 CFLAGS += -std=gnu99 -Wall -W
 CFLAGS += -DUNUSED="__attribute__((unused))"
 CFLAGS += -DNDEBUG
-LDFLAGS_user = -lpthread
 LDFLAGS =
 
 ifeq ($(THREADSANITIZE), 1)
@@ -35,11 +27,19 @@ else
 LDFLAGS += -lpthread
 endif
 
+ifeq ($(ENABLE_SO_REUSEPORT), 1)
+CFLAGS += -D ENABLE_SO_REUSEPORT
+endif
+
+CFLAGS += -D THPOOLFLAG
+
+CFLAG_HTSTRESS += -std=gnu99 -Wall -Werror -Wextra -lpthread
+
 # standard build rules
 .SUFFIXES: .o .c
 .c.o:
 	$(VECHO) "  CC\t$@\n"
-	$(Q)$(CC) -o $@ $(CFLAGS) -c -MMD -MF $@.d $< -D $(THPOOLFLAG) -D $(SOCKETFLAG)
+	$(Q)$(CC) -o $@ $(CFLAGS) -c -MMD -MF $@.d $<
 
 OBJS = \
     src/http.o \
@@ -56,13 +56,14 @@ $(TARGET): $(OBJS)
 	$(Q)$(CC) -o $@ $^ $(LDFLAGS)
 
 htstress: htstress.c
-	$(CC) $(CFLAGS_user) -o $@ $< $(LDFLAGS_user)
+	$(VECHO) "  CC\t$@\n"
+	$(Q)$(CC) -o $@ $< $(CFLAG_HTSTRESS)
 
 check: all
 	@scripts/test.sh
 
 clean:
 	$(VECHO) "  Cleaning...\n"
-	$(Q)$(RM) $(TARGET) $(OBJS) $(deps)
+	$(Q)$(RM) $(TARGET) $(OBJS) $(deps) htstress
 
 -include $(deps)
