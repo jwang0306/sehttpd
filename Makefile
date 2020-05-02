@@ -9,13 +9,13 @@ $(GIT_HOOKS):
 
 include common.mk
 
-THREADSANITIZE = 0
-ENABLE_SO_REUSEPORT = 1
-ENABLE_THPOOL = 1
-SOCKETFLAG = ENABLE_SO_REUSEPORT
-THPOOLFLAG = THPOOL
+THREADSANITIZE := 0
+ENABLE_SO_REUSEPORT := 0
+ENABLE_THPOOL := 0
 
-CFLAGS = -I./src
+THPOOLFLAG = LF_THPOOL
+
+CFLAGS += -I./src
 CFLAGS += -O2
 CFLAGS += -std=gnu99 -Wall -W
 CFLAGS += -DUNUSED="__attribute__((unused))"
@@ -23,18 +23,14 @@ CFLAGS += -DNDEBUG
 LDFLAGS =
 
 ifeq ($(THREADSANITIZE), 1)
-CFLAGS += -fsanitize=thread
-LDFLAGS += -fsanitize=thread
+	CFLAGS += -fsanitize=thread
+	LDFLAGS += -fsanitize=thread
 else
-LDFLAGS += -lpthread
+	LDFLAGS += -lpthread
 endif
 
 ifeq ($(ENABLE_SO_REUSEPORT), 1)
-CFLAGS += -D $(SOCKETFLAG)
-endif
-
-ifeq ($(ENABLE_THPOOL), 1)
-CFLAGS += -D $(THPOOLFLAG)
+	CFLAGS += -D ENABLE_SO_REUSEPORT
 endif
 
 CFLAG_HTSTRESS += -std=gnu99 -Wall -Werror -Wextra -lpthread
@@ -50,9 +46,19 @@ OBJS = \
     src/http_parser.o \
     src/http_request.o \
     src/timer.o \
-    src/thpool.o \
-    src/lf_thpool.o \
     src/mainloop.o
+
+ifeq ($(ENABLE_THPOOL), 1)
+ifeq ($(THPOOLFLAG), THPOOL)
+	OBJS += src/thpool.o
+endif
+ifeq ($(THPOOLFLAG), LF_THPOOL)
+	OBJS += src/lf_thpool.o
+endif
+	CFLAGS += -D ENABLE_THPOOL
+	CFLAGS += -D $(THPOOLFLAG)
+endif
+
 deps += $(OBJS:%.o=%.o.d)
 
 $(TARGET): $(OBJS)

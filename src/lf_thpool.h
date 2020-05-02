@@ -3,7 +3,7 @@
 
 #include <fcntl.h>
 #include <pthread.h>
-// #include <signal.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,14 +33,14 @@ typedef struct {
     thread_t *threads;
     int thread_count;
     int is_stopped;
-} lf_thpool_t;
+} thpool_t;
 
 /* utils */
-lf_thpool_t *lf_thpool_create(int thread_count, int queue_size);
-int lf_thpool_destroy(lf_thpool_t *lf_thpool);
-task_t *lf_thpool_deq(thread_t *thread);
-void lf_thpool_enq(lf_thpool_t *lf_thpool, void (*task)(void *), void *arg);
-thread_t *round_robin_schedule(lf_thpool_t *lf_thpool);
+thpool_t *thpool_create(int thread_count, int queue_size);
+int thpool_destroy(thpool_t *lf_thpool);
+task_t *thpool_deq(thread_t *thread);
+void thpool_enq(thpool_t *lf_thpool, void (*task)(void *), void *arg);
+thread_t *round_robin_schedule(thpool_t *lf_thpool);
 int dispatch_task(thread_t *thread, void (*task)(void *), void *arg);
 
 #endif

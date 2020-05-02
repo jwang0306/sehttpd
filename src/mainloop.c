@@ -14,11 +14,14 @@
 #include "logger.h"
 #include "timer.h"
 
+#if (ENABLE_THPOOL)
 #if (THPOOL)
 #include "thpool.h"
 #endif
 #if (LF_THPOOL)
 #include "lf_thpool.h"
+#endif
+thpool_t *thpool;
 #endif
 
 /* the length of the struct epoll_events array pointed to by *events */
@@ -159,7 +162,7 @@ void accept_connection(int listenfd)
     }
 }
 
-void process_events(int listenfd, void *thpool UNUSED)
+void process_events(int listenfd)
 {
     int n = epoll_wait(epfd, events, MAXEVENTS, find_timer());
     for (int i = 0; i < n; i++) {
@@ -175,22 +178,20 @@ void process_events(int listenfd, void *thpool UNUSED)
                 close(fd);
                 continue;
             }
-#if (THPOOL)
-            thpool_enq(thpool, do_request, events[i].data.ptr);
-            continue;
+            if (!master_process) {
+#if (ENABLE_THPOOL)
+                thpool_enq(thpool, do_request, events[i].data.ptr);
+                continue;
 #endif
-#if (LF_THPOOL)
-            lf_thpool_enq(thpool, do_request, events[i].data.ptr);
-            continue;
-#endif
+            }
             do_request(events[i].data.ptr);
         }
     }
 }
 
-void process_events_and_timers(int listenfd, void *thpool)
+void process_events_and_timers(int listenfd)
 {
-    process_events(listenfd, thpool);
+    process_events(listenfd);
     handle_expired_timers();
 }
 
@@ -216,17 +217,16 @@ void single_process_cycle(int listenfd)
     event_init();
     timer_init();
     request_init(listenfd);
-    void *thpool = NULL;
-#if (THPOOL)
-    thpool = thpool_create(THREAD_COUNT, WORK_QUEUE_SIZE);
+
+    if (!master_process) {
+#if (ENABLE_THPOOL)
+        thpool = thpool_create(THREAD_COUNT, WORK_QUEUE_SIZE);
 #endif
-#if (LF_THPOOL)
-    thpool = lf_thpool_create(THREAD_COUNT, WORK_QUEUE_SIZE);
-#endif
+    }
     /* epoll_wait loop */
     printf("Worker process %d: Web server started.\n", getpid());
     while (1) {
-        process_events_and_timers(listenfd, thpool);
+        process_events_and_timers(listenfd);
     }
 }
 
@@ -245,13 +245,8 @@ int spawn_process(int listenfd)
     }
 }
 
-void master_process_cycle()
+void master_process_cycle(int listenfd)
 {
-    int listenfd = -1;
-#if !defined(ENABLE_SO_REUSEPORT)
-    listenfd = open_listenfd(PORT);
-#endif
-
     int worker_pid[worker_processes];
     for (int i = 0; i < worker_processes; ++i) {
         worker_pid[i] = spawn_process(listenfd);
@@ -287,10 +282,17 @@ int main()
         log_err("Failed to install sigal handler for SIGPIPE");
         return 0;
     }
+
+    int listenfd = -1;
+
+#if !defined(ENABLE_SO_REUSEPORT)
+    listenfd = open_listenfd(PORT);
+#endif
+
     if (master_process) {
-        master_process_cycle();
+        master_process_cycle(listenfd);
     } else {
-        single_process_cycle(1);
+        single_process_cycle(listenfd);
     }
     return 0;
 }
