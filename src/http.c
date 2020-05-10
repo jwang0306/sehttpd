@@ -313,9 +313,10 @@ void do_request(void *ptr)
         .data.ptr = ptr,
         .events = EPOLLIN | EPOLLET | EPOLLONESHOT,
     };
+    add_timer(r, TIMEOUT_DEFAULT, http_close_conn);
     epoll_ctl(r->epfd, EPOLL_CTL_MOD, r->fd, &event);
 
-    add_timer(r, TIMEOUT_DEFAULT, http_close_conn);
+    // add_timer(r, TIMEOUT_DEFAULT, http_close_conn);
     return;
 
 err:

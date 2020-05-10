@@ -9,6 +9,7 @@
 
 #define TIMER_INFINITE (-1)
 #define PQ_DEFAULT_SIZE 10
+#define INT_MIN -10000000
 
 typedef int (*prio_queue_comparator)(void *pi, void *pj);
 
@@ -74,6 +75,9 @@ static bool resize(prio_queue_t *ptr, size_t new_size)
 
 static inline void swap(prio_queue_t *ptr, size_t i, size_t j)
 {
+    ((timer_node *) ptr->priv[i])->idx = j;
+    ((timer_node *) ptr->priv[j])->idx = i;
+
     void *tmp = ptr->priv[i];
     ptr->priv[i] = ptr->priv[j];
     ptr->priv[j] = tmp;
@@ -120,6 +124,27 @@ static bool prio_queue_delmin(prio_queue_t *ptr)
     return true;
 }
 
+static bool prio_queue_deckey(prio_queue_t *ptr, size_t idx, int val)
+{
+    if (prio_queue_is_empty(ptr))
+        return false;
+
+    ((timer_node *) ptr->priv[idx])->key += val;
+    swim(ptr, idx);
+    return true;
+}
+
+/* remove the item of the given key */
+static bool prio_queue_delete(prio_queue_t *ptr, size_t idx)
+{
+    bool ret UNUSED = prio_queue_deckey(ptr, idx, INT_MIN);
+    timer_node *node = prio_queue_min(ptr);
+    assert(ret && "prio_queue_delete error");
+    prio_queue_delmin(ptr);
+    free(node);
+    return true;
+}
+
 /* add a new item to the heap */
 static bool prio_queue_insert(prio_queue_t *ptr, void *item)
 {
@@ -154,16 +179,19 @@ int timer_init()
 {
     bool ret UNUSED = prio_queue_init(&timer, timer_comp, PQ_DEFAULT_SIZE);
     assert(ret && "prio_queue_init error");
+#if (ENABLE_THPOOL)
     int tl UNUSED = pthread_mutex_init(&timer_lock, NULL);
     assert(tl == 0 && "timer lock init error");
-
+#endif
     time_update();
     return 0;
 }
 
 int find_timer()
 {
+#if (ENABLE_THPOOL)
     pthread_mutex_lock(&timer_lock);
+#endif
     int time = TIMER_INFINITE;
 
     while (!prio_queue_is_empty(&timer)) {
@@ -171,78 +199,87 @@ int find_timer()
         timer_node *node = prio_queue_min(&timer);
         assert(node && "prio_queue_min error");
 
-        if (node->deleted) {
-            bool ret UNUSED = prio_queue_delmin(&timer);
-            assert(ret && "prio_queue_delmin");
-            free(node);
-            continue;
-        }
-
         time = (int) (node->key - current_msec);
         time = (time > 0 ? time : 0);
         break;
     }
+#if (ENABLE_THPOOL)
     pthread_mutex_unlock(&timer_lock);
+#endif
     return time;
 }
 
 void handle_expired_timers()
 {
-    pthread_mutex_lock(&timer_lock);
     bool ret UNUSED;
-
-    while (!prio_queue_is_empty(&timer)) {
+    for (;;) {
+#if (ENABLE_THPOOL)
+        pthread_mutex_lock(&timer_lock);
+#endif
+        if (prio_queue_is_empty(&timer)) {
+#if (ENABLE_THPOOL)
+            pthread_mutex_unlock(&timer_lock);
+#endif
+            return;
+        }
         debug("handle_expired_timers, size = %zu", prio_queue_size(&timer));
         time_update();
         timer_node *node = prio_queue_min(&timer);
         assert(node && "prio_queue_min error");
 
-        if (node->deleted) {
-            ret = prio_queue_delmin(&timer);
-            assert(ret && "handle_expired_timers: prio_queue_delmin error");
-            free(node);
-            continue;
-        }
-
         if (node->key > current_msec) {
+#if (ENABLE_THPOOL)
             pthread_mutex_unlock(&timer_lock);
+#endif
             return;
         }
+        ret = prio_queue_delmin(&timer);
+        assert(ret && "handle_expired_timers: prio_queue_delmin error");
+
         if (node->callback)
             node->callback(node->request);
 
-        ret = prio_queue_delmin(&timer);
-        assert(ret && "handle_expired_timers: prio_queue_delmin error");
         free(node);
+#if (ENABLE_THPOOL)
+        pthread_mutex_unlock(&timer_lock);
+#endif
     }
-    pthread_mutex_unlock(&timer_lock);
 }
 
 void add_timer(http_request_t *req, size_t timeout, timer_callback cb)
 {
-    pthread_mutex_lock(&timer_lock);
     timer_node *node = malloc(sizeof(timer_node));
     assert(node && "add_timer: malloc error");
 
+#if (ENABLE_THPOOL)
+    pthread_mutex_lock(&timer_lock);
+#endif
     time_update();
     req->timer = node;
     node->key = current_msec + timeout;
     node->deleted = false;
     node->callback = cb;
     node->request = req;
+    node->idx = timer.nalloc + 1;
 
     bool ret UNUSED = prio_queue_insert(&timer, node);
     assert(ret && "add_timer: prio_queue_insert error");
+#if (ENABLE_THPOOL)
     pthread_mutex_unlock(&timer_lock);
+#endif
 }
 
 void del_timer(http_request_t *req)
 {
+#if (ENABLE_THPOOL)
     pthread_mutex_lock(&timer_lock);
+#endif
     time_update();
     timer_node *node = req->timer;
     assert(node && "del_timer: req->timer is NULL");
-
-    node->deleted = true;
+    bool ret UNUSED = prio_queue_delete(&timer, node->idx);
+    assert(ret && "del_timer: prio_queue_delete error");
+#if (ENABLE_THPOOL)
     pthread_mutex_unlock(&timer_lock);
+#endif
 }
