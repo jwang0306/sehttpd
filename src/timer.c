@@ -124,7 +124,8 @@ static bool prio_queue_delmin(prio_queue_t *ptr)
     return true;
 }
 
-static bool prio_queue_deckey(prio_queue_t *ptr, size_t idx, int val)
+/* decrease the key value of a specific node */
+static bool prio_queue_dec_key(prio_queue_t *ptr, size_t idx, int val)
 {
     if (prio_queue_is_empty(ptr))
         return false;
@@ -137,7 +138,7 @@ static bool prio_queue_deckey(prio_queue_t *ptr, size_t idx, int val)
 /* remove the item of the given key */
 static bool prio_queue_delete(prio_queue_t *ptr, size_t idx)
 {
-    bool ret UNUSED = prio_queue_deckey(ptr, idx, INT_MIN);
+    bool ret UNUSED = prio_queue_dec_key(ptr, idx, INT_MIN);
     timer_node *node = prio_queue_min(ptr);
     assert(ret && "prio_queue_delete error");
     prio_queue_delmin(ptr);
