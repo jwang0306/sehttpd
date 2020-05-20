@@ -3,9 +3,12 @@
 
 #include <errno.h>
 #include <stdbool.h>
+#include <sys/mman.h>
+#include <sys/types.h>
 #include <time.h>
-
+#include <unistd.h>
 #include "list.h"
+#include "logger.h"
 
 enum http_parser_retcode {
     HTTP_PARSER_INVALID_METHOD = 10,
@@ -26,13 +29,15 @@ enum http_status {
     HTTP_NOT_FOUND = 404,
 };
 
-#define MAX_BUF 8124
+#define MAX_BUF 8192
+// #define MAX_BUF (getpagesize())
 
 typedef struct {
     void *root;
     int fd;
     int epfd;
-    char buf[MAX_BUF]; /* ring buffer */
+    int mem_fd;
+    char *buf; /* ring buffer */
     size_t pos, last;
     int state;
     void *request_start;
@@ -87,6 +92,38 @@ static inline void init_http_request(http_request_t *r,
     r->state = 0;
     r->root = root;
     INIT_LIST_HEAD(&(r->list));
+
+    /* We mmap two adjacent pages (in virtual memory) that point to the same
+     * physical memory. This lets us optimize memory access, so that we don't
+     * need to even worry about wrapping our pointers around until we go
+     * through the entire buffer.
+     */
+    // Check that the requested size is a multiple of a page
+    if (MAX_BUF % getpagesize() != 0) {
+        perror("Requested size is not a multiple of the page size");
+    }
+    // Create an anonymous file backed by memory
+    if ((r->mem_fd = memfd_create("req_buf", 0)) == -1)
+        perror("init_http_request: memfd_create error");
+
+    // Set buffer size
+    if (ftruncate(r->mem_fd, MAX_BUF) != 0)
+        perror("Could not set size of anonymous file");
+
+    // Ask mmap for a good address
+    if ((r->buf = mmap(NULL, 2 * MAX_BUF, PROT_NONE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)) == MAP_FAILED)
+        perror("Could not allocate virtual memory");
+
+    // Mmap first region
+    if (mmap(r->buf, MAX_BUF, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED,
+             r->mem_fd, 0) == MAP_FAILED)
+        perror("Could not map buffer into virtual memory");
+
+    // Mmap second region, with exact address
+    if (mmap(r->buf + MAX_BUF, MAX_BUF, PROT_READ | PROT_WRITE,
+             MAP_SHARED | MAP_FIXED, r->mem_fd, 0) == MAP_FAILED)
+        perror("Could not map buffer into virtual memory");
 }
 
 /* TODO: public functions should have conventions to prefix http_ */

@@ -38,7 +38,7 @@ int http_parse_request_line(http_request_t *r)
     state = r->state;
 
     for (pi = r->pos; pi < r->last; pi++) {
-        p = (uint8_t *) &r->buf[pi % MAX_BUF];
+        p = (uint8_t *) &r->buf[pi];
         ch = *p;
 
         /* TODO: use computed goto for efficient dispatching */
@@ -253,6 +253,11 @@ int http_parse_request_line(http_request_t *r)
     r->pos = pi;
     r->state = state;
 
+    // if (r->pos >= MAX_BUF) {
+    //     r->pos -= MAX_BUF;
+    //     r->last -= MAX_BUF;
+    // }
+
     return EAGAIN;
 
 done:
@@ -287,7 +292,7 @@ int http_parse_request_body(http_request_t *r)
 
     http_header_t *hd;
     for (pi = r->pos; pi < r->last; pi++) {
-        p = (uint8_t *) &r->buf[pi % MAX_BUF];
+        p = (uint8_t *) &r->buf[pi];
         ch = *p;
 
         switch (state) {
@@ -379,6 +384,11 @@ int http_parse_request_body(http_request_t *r)
 
     r->pos = pi;
     r->state = state;
+
+    // if (r->pos >= MAX_BUF) {
+    //     r->pos -= MAX_BUF;
+    //     r->last -= MAX_BUF;
+    // }
 
     return EAGAIN;
 
