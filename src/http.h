@@ -26,13 +26,15 @@ enum http_status {
     HTTP_NOT_FOUND = 404,
 };
 
-#define MAX_BUF 8124
+#define MAX_BUF 8388608 /* 8MB */
+#define BUF_SIZE 8192
 
 typedef struct {
     void *root;
     int fd;
     int epfd;
-    char buf[MAX_BUF]; /* ring buffer */
+    char *buf; /* ring buffer */
+    size_t buf_size;
     size_t pos, last;
     int state;
     void *request_start;
@@ -87,6 +89,8 @@ static inline void init_http_request(http_request_t *r,
     r->state = 0;
     r->root = root;
     INIT_LIST_HEAD(&(r->list));
+    r->buf_size = BUF_SIZE;
+    r->buf = (char *) malloc(r->buf_size);
 }
 
 /* TODO: public functions should have conventions to prefix http_ */

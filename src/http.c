@@ -228,11 +228,16 @@ void do_request(void *ptr)
 
     del_timer(r);
     for (;;) {
-        char *plast = &r->buf[r->last % MAX_BUF];
-        size_t remain_size =
-            MIN(MAX_BUF - (r->last - r->pos) - 1, MAX_BUF - r->last % MAX_BUF);
+        char *plast;
+        size_t remain_size;
+        int n;
 
-        int n = read(fd, plast, remain_size);
+    do_read:
+        plast = &r->buf[r->last];
+        remain_size =
+            MIN(r->buf_size - (r->last - r->pos) - 1, r->buf_size - r->last);
+
+        n = read(fd, plast, remain_size);
         assert(r->last - r->pos < MAX_BUF && "request buffer overflow!");
 
         if (n == 0) /* EOF */
@@ -248,6 +253,14 @@ void do_request(void *ptr)
 
         r->last += n;
         assert(r->last - r->pos < MAX_BUF && "request buffer overflow!");
+
+        if (r->last == r->buf_size) {
+            r->buf_size *= 2;
+            if (r->buf_size > MAX_BUF)
+                r->buf_size = MAX_BUF;
+            r->buf = (char *) realloc(r->buf, r->buf_size);
+            goto do_read;
+        }
 
         /* about to parse request line */
         rc = http_parse_request_line(r);
@@ -305,6 +318,9 @@ void do_request(void *ptr)
             debug("no keep_alive! ready to close");
             free(out);
             goto close;
+        } else {
+            r->last = 0;
+            r->pos = 0;
         }
         free(out);
     }
