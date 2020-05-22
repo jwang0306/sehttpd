@@ -95,7 +95,7 @@ task_t *thpool_deq(thread_t *thread)
         return NULL;
     }
     int out_offset = thread->out;
-    thread->out = (thread->out + 1) % thread->size;
+    thread->out = (thread->out + 1) & (thread->size - 1);
     __sync_fetch_and_sub(&(thread->task_count), 1);
     return thread->buffer + out_offset;
 }
@@ -112,7 +112,7 @@ void thpool_enq(thpool_t *lf_thpool, void (*task)(void *), void *arg)
 thread_t *round_robin_schedule(thpool_t *lf_thpool)
 {
     static int cur_thread_index = -1;
-    cur_thread_index = (cur_thread_index + 1) % lf_thpool->thread_count;
+    cur_thread_index = (cur_thread_index + 1) & (lf_thpool->thread_count - 1);
     return lf_thpool->threads + cur_thread_index;
 }
 
@@ -126,7 +126,7 @@ int dispatch_task(thread_t *thread, void (*task)(void *), void *arg)
     (thread->buffer + thread->in)->function = task;
     (thread->buffer + thread->in)->arg = arg;
     __sync_fetch_and_add(&(thread->task_count), 1);
-    thread->in = (thread->in + 1) % thread->size;
+    thread->in = (thread->in + 1) & (thread->size - 1);
     return 1;
 }
 

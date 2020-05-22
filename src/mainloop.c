@@ -29,14 +29,14 @@ thpool_t *thpool;
 
 #define LISTENQ 1024
 
-#define THREAD_COUNT 4
-#define WORK_QUEUE_SIZE 65536
+#define THREAD_COUNT 32
+#define WORK_QUEUE_SIZE (2 << 16) /* 65536 */
 
 /* TODO: use command line options to specify */
 #define PORT 8081
 #define WEBROOT "./www"
 
-bool master_process = true;
+bool master_process = false;
 int worker_processes = 4;
 
 int epfd = -1;
@@ -198,6 +198,9 @@ void process_events_and_timers(int listenfd)
 int shutdown_worker(int pid)
 {
     int status;
+#if (ENABLE_THPOOL)
+    thpool_destroy(thpool);
+#endif
     kill(pid, SIGTERM);
     waitpid(pid, &status, 0);
 
@@ -220,6 +223,10 @@ void single_process_cycle(int listenfd)
 
     if (!master_process) {
 #if (ENABLE_THPOOL)
+        _Static_assert(!(WORK_QUEUE_SIZE & (WORK_QUEUE_SIZE - 1)),
+                       "WORK_QUEUE_SIZE should be power of 2");
+        _Static_assert(!(THREAD_COUNT & (THREAD_COUNT - 1)),
+                       "THREAD_COUNT should be power of 2");
         thpool = thpool_create(THREAD_COUNT, WORK_QUEUE_SIZE);
 #endif
     }
